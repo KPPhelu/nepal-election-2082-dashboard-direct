@@ -5,6 +5,7 @@ from election_2082 import get_all_live_results
 import os
 import time
 from datetime import datetime
+import pytz # Import this at the top
 
 # Set page config
 st.set_page_config(page_title="Election 2082 Dashboard", layout="wide")
@@ -14,22 +15,49 @@ st.write("(Source: https://www.onlinekhabar.com/)")
 
 
 # --- Helper for Time Ago ---
+# def get_time_info(filepath):
+#     if os.path.exists(filepath):
+#         mtime = os.path.getmtime(filepath)
+#         last_updated = datetime.fromtimestamp(mtime)
+#         now = datetime.now()
+#         diff = now - last_updated
+#
+#         hours, remainder = divmod(int(diff.total_seconds()), 3600)
+#         minutes, _ = divmod(remainder, 60)
+#
+#         if hours > 0:
+#             time_str = f"{hours}h {minutes}m ago"
+#         else:
+#             time_str = f"{minutes}m ago"
+#
+#         return last_updated.strftime("%Y-%m-%d %I:%M %p"), time_str
+#     return "Never", "N/A"
+
 def get_time_info(filepath):
     if os.path.exists(filepath):
+        # 1. Get the file's modification time (UTC)
         mtime = os.path.getmtime(filepath)
-        last_updated = datetime.fromtimestamp(mtime)
-        now = datetime.now()
-        diff = now - last_updated
+        utc_dt = datetime.fromtimestamp(mtime, tz=pytz.utc)
 
-        hours, remainder = divmod(int(diff.total_seconds()), 3600)
-        minutes, _ = divmod(remainder, 60)
+        # 2. Convert to Nepal Time (+5:45)
+        npt_tz = pytz.timezone('Asia/Kathmandu')
+        last_updated_npt = utc_dt.astimezone(npt_tz)
 
-        if hours > 0:
-            time_str = f"{hours}h {minutes}m ago"
+        # 3. Get current time in Nepal for "Time Ago" calculation
+        now_npt = datetime.now(npt_tz)
+        diff = now_npt - last_updated_npt
+
+        # 4. Format the "Time Ago" string
+        total_seconds = int(diff.total_seconds())
+        if total_seconds < 60:
+            time_ago = "just now"
         else:
-            time_str = f"{minutes}m ago"
+            hours, remainder = divmod(total_seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+            time_ago = f"{hours}h {minutes}m ago" if hours > 0 else f"{minutes}m ago"
 
-        return last_updated.strftime("%Y-%m-%d %I:%M %p"), time_str
+        return last_updated_npt.strftime("%Y-%m-%d %I:%M %p"), time_ago
+
     return "Never", "N/A"
 
 # --- Helper to load data safely ---
