@@ -331,7 +331,7 @@ with tab1:
 
             # 3. Search Bar with type-to-filter
             selected_option = st.selectbox(
-                "Type to search (e.g., 'Gagan', 'काठमाडौं', or 'Kathmandu'):",
+                "Type to search (e.g., 'Balen', 'काठमाडौं', or 'Kathmandu'):",
                 options=[""] + sorted(search_master['search_label'].unique().tolist()),
                 index=0,
                 placeholder="Search here..."
