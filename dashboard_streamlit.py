@@ -3,7 +3,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from election_2082 import get_all_live_results, get_samanupatik_results
+from election_2082 import get_all_live_results
 import os
 import time
 from datetime import datetime
@@ -482,6 +482,7 @@ with tab2:
 
     with col_s_btn:
         if st.button("🔄 Refresh Samanupatik Data"):
+            from election_2082 import get_samanupatik_results  # Move import here
             with st.spinner("Scraping Proportional Votes..."):
                 if get_samanupatik_results():
                     st.success("Samanupatik Data Updated!")
@@ -489,7 +490,7 @@ with tab2:
                     st.rerun()
 
     st.divider()
-    
+
     if df_saman is not None and not df_saman.empty:
         # 3. National Summary Metric
         total_pr_votes = df_saman['Samanupatik Votes'].sum()
