@@ -1,3 +1,5 @@
+# dashboard_streamlit.py
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -12,26 +14,6 @@ st.set_page_config(page_title="Election 2082 Dashboard", layout="wide")
 
 st.title("🗳️ Election 2082 Live Dashboard (प्रत्यक्ष)")
 st.write("(Source: https://www.onlinekhabar.com/)")
-
-
-# --- Helper for Time Ago ---
-# def get_time_info(filepath):
-#     if os.path.exists(filepath):
-#         mtime = os.path.getmtime(filepath)
-#         last_updated = datetime.fromtimestamp(mtime)
-#         now = datetime.now()
-#         diff = now - last_updated
-#
-#         hours, remainder = divmod(int(diff.total_seconds()), 3600)
-#         minutes, _ = divmod(remainder, 60)
-#
-#         if hours > 0:
-#             time_str = f"{hours}h {minutes}m ago"
-#         else:
-#             time_str = f"{minutes}m ago"
-#
-#         return last_updated.strftime("%Y-%m-%d %I:%M %p"), time_str
-#     return "Never", "N/A"
 
 def get_time_info(filepath):
     if os.path.exists(filepath):
@@ -66,6 +48,19 @@ def load_data(file):
         return pd.read_csv(file, encoding='utf-8-sig')
     except FileNotFoundError:
         return None
+
+# --- Helper to load data with fallback ---
+def load_data_with_fallback(primary_file, backup_file):
+    """Try to load primary file, fallback to backup if missing/empty."""
+    try:
+        if os.path.exists(primary_file) and os.path.getsize(primary_file) > 0:
+            return pd.read_csv(primary_file, encoding='utf-8-sig')
+        elif os.path.exists(backup_file):
+            st.warning(f"⚠️ {primary_file} not found. Loading backup data...")
+            return pd.read_csv(backup_file, encoding='utf-8-sig')
+    except Exception as e:
+        st.error(f"Error loading {primary_file}: {e}")
+    return None
 
 # # Function to fix the status logic
 def fix_election_status(df, df_voters):
@@ -132,7 +127,9 @@ def calculate_vote_share(df_live, df_voters):
 # Load your scraped data
 df_voters = load_data("election_2082_voter_stats.csv")
 df_parties = load_data("election_2082_party_list.csv")
-df_live = load_data("live_election_results_2082.csv")
+# df_live = load_data("live_election_results_2082.csv")
+df_live = load_data_with_fallback("live_election_results_2082.csv", "live_election_results_2082_backup.csv")
+df_translate = load_data("translation_name_map.csv")
 
 # Apply the fix
 if df_live is not None:
@@ -144,6 +141,13 @@ tab1, tab2, tab3 = st.tabs(["📡 Live Count", "📊 Voter Stats", "🚩 Party L
 
 with tab1:
     if df_live is not None:
+        # --- DEFINE GLOBAL COLOR MAP FIRST ---
+        # Get all unique parties from the live data
+        all_parties = sorted(df_live['party'].unique())
+        # Create a consistent color mapping for the entire dashboard
+        color_map = {p: px.colors.qualitative.Plotly[i % 10] for i, p in enumerate(all_parties)}
+
+
         # 1. Header with Refresh Button
         col_t, col_b = st.columns([3, 1])
 
@@ -167,7 +171,7 @@ with tab1:
 
         st.divider()
 
-        # --- 1. Election Progress Overview ---
+        # --- 2. Election Progress Overview ---
         st.subheader("📊 Election Progress Overview")
 
         # Identify state per constituency
@@ -195,12 +199,45 @@ with tab1:
 
         st.divider()
 
-        # --- 2. National Tally Charts (3 Columns) ---
+        # --- 3. PIE CHART National Seat Share Pie Chart ---
+        st.subheader("🎯 Overall Seat Share (Confirmed + Probable)")
+
+        # Filter for both Winners and Probable Wins
+        df_combined = df_live[df_live['Status'].isin(["Winner", "Probable Win"])]
+
+        if not df_combined.empty:
+            # Count seats per party
+            seat_counts = df_combined['party'].value_counts().reset_index()
+            seat_counts.columns = ['Party', 'Seats']
+
+            # Create Pie Chart
+            fig_pie = px.pie(
+                seat_counts,
+                values='Seats',
+                names='Party',
+                title="Distribution of Won & Probable Seats",
+                color='Party',
+                color_discrete_map=color_map, # Uses your existing color map
+                hole=0.4 # Makes it a Donut Chart for better readability
+            )
+
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+            fig_pie.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+
+            # Display the Pie Chart
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.info("No confirmed or probable wins recorded yet to display seat share.")
+
+        st.divider()
+
+
+        # --- 4. NATIONAL TALLY CHARTS (Bar Charts)  (3 Columns) ---
         st.subheader("🏁 Current Tally Summary")
 
-        # Create a shared color map for parties
-        all_parties = sorted(df_live['party'].unique())
-        color_map = {p: px.colors.qualitative.Plotly[i % 10] for i, p in enumerate(all_parties)}
+        # # Create a shared color map for parties
+        # all_parties = sorted(df_live['party'].unique())
+        # color_map = {p: px.colors.qualitative.Plotly[i % 10] for i, p in enumerate(all_parties)}
 
 
         def plot_tally_no_legend(df_filter, title):
@@ -267,7 +304,87 @@ with tab1:
             st.write("---")
             st.caption("No active leads or wins to display in the legend yet.")
 
-        # --- 3. Detailed Tally Tables (4 Parts) ---
+        # --- 5. Unified Search Implementation ---
+        st.divider()
+        st.subheader("🔍 Search Candidate or Constituency")
+
+        # Load the static translation file locally for the search tool
+        # df_translate = load_data("translation_name_map.csv")
+
+        if df_live is not None and df_translate is not None:
+            # 1. Create a local copy for searching to avoid affecting main df_live
+            # Merge English names onto the live data for the search labels
+            search_master = pd.merge(
+                df_live,
+                df_translate[['ID', 'name', 'name_english']],
+                on=['ID', 'name'],
+                how='left'
+            )
+            search_master['name_english'] = search_master['name_english'].fillna(search_master['name'])
+
+            # 2. Generate the "English | Nepali (Constituency)" search strings
+            search_master['search_label'] = (
+                    search_master['name_english'] + " | " +
+                    search_master['name'] + " (" +
+                    search_master['ID'] + ")"
+            )
+
+            # 3. Search Bar with type-to-filter
+            selected_option = st.selectbox(
+                "Type to search (e.g., 'Gagan', 'काठमाडौं', or 'Kathmandu'):",
+                options=[""] + sorted(search_master['search_label'].unique().tolist()),
+                index=0,
+                placeholder="Search here..."
+            )
+
+            if selected_option:
+                # 1. Get the ID of the selected constituency from our search master
+                selected_row = search_master[search_master['search_label'] == selected_option].iloc[0]
+                selected_id = selected_row['ID']
+
+                # 4. Display Results (Filter from original df_live to keep your existing logic intact)
+                # st.info(f"📍 Showing Detailed Results for: **{selected_id}**")
+
+                # Filter original df_live by the selected ID
+                con_results = df_live[df_live['ID'] == selected_id].copy()
+
+                # Ensure votes are treated as numeric for sorting
+                con_results['votes_int'] = con_results['votes'].apply(
+                    lambda x: int(str(x).replace(',', '')) if pd.notnull(x) else 0
+                )
+                con_results = con_results.sort_values('votes_int', ascending=False)
+
+                # --- Show results inside an Expander ---
+                # The label shows the Constituency ID/Name
+                # Get the leader (top row)
+                leader = con_results.iloc[0]
+                total_counted_so_far = con_results['votes_int'].sum()
+                # 3. Get total casted from voter stats (mapped by 'Constituency' key in df_voters)
+                # Check if df_voters exists and find matching row for the selected_id
+                voter_row = df_voters[df_voters['Constituency'] == selected_id]
+                total_casted = int(voter_row['Total Casted Votes'].iloc[0]) if not voter_row.empty else 0
+                # Calculations
+                remaining = max(0, total_casted - total_counted_so_far)
+                progress_percent = (total_counted_so_far / total_casted * 100) if total_casted > 0 else 0
+                nepali_con_name = leader['Constituency']
+                # 4. Construct the Unified Label
+                label = (f"📍 {nepali_con_name} — {leader['name']} ({leader['party']}) | "
+                         f"{progress_percent:.1f}% Counted | "
+                         f"Counted: {total_counted_so_far:,} | "
+                         f"Remaining: {remaining:,}")
+
+                # nepali_con_name = df_live[df_live['ID'] == selected_id]['Constituency'].iloc[0]
+                with st.expander(label, expanded=True):
+                    st.table(con_results[['name', 'party', 'votes', 'Vote % Share', 'Status']])
+                #
+                # # Show the table as requested (Detailed Tally style)
+                # st.table(con_results[['name', 'party', 'votes', 'Vote % Share', 'Status']])
+        else:
+            st.warning("Search unavailable: Ensure 'translation_name_map.csv' is in your repository.")
+
+
+
+        # --- 6. Detailed Tally Tables (4 Parts) ---
         st.write("### 📋 Detailed Constituency Tables")
 
         # Define columns for the summary and the full candidate list
