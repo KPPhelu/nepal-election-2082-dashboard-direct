@@ -3,7 +3,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from election_2082 import get_all_live_results
+from election_2082 import get_all_live_results, get_samanupatik_results
 import os
 import time
 from datetime import datetime
@@ -12,7 +12,7 @@ import pytz # Import this at the top
 # Set page config
 st.set_page_config(page_title="Election 2082 Dashboard", layout="wide")
 
-st.title("🗳️ Election 2082 Live Dashboard (प्रत्यक्ष)")
+st.title("🗳️ Election 2082 Live Dashboard")
 st.write("(Source: https://www.onlinekhabar.com/)")
 
 def get_time_info(filepath):
@@ -137,8 +137,10 @@ if df_live is not None:
     df_live = calculate_vote_share(df_live, df_voters)
 
 # Create Tabs for different views
-tab1, tab2, tab3 = st.tabs(["📡 Live Count", "📊 Voter Stats", "🚩 Party List"])
+# tab1, tab2, tab3 = st.tabs(["📡 Live Count", "📊 Voter Stats", "🚩 Party List"])
+tab1, tab2, tab3, tab4 = st.tabs(["📡 प्रत्यक्ष", "🗳️ समानुपातिक", "📊 Voter Stats", "🚩 Party List"])
 
+# --- Tab 1: Direct elected  ---
 with tab1:
     if df_live is not None:
         # --- DEFINE GLOBAL COLOR MAP FIRST ---
@@ -463,8 +465,80 @@ with tab1:
             else:
                 st.success("All constituencies have started reporting votes!")
 
-# --- Tab 2: Voter Statistics ---
+# --- Tab 2: Samanupatik (Proportional) ---
 with tab2:
+    st.subheader("🗳️ National Samanupatik (Proportional) Tally")
+
+    # 1. Load Samanupatik Data
+    saman_file = "election_2082_samanupatik_results.csv"
+    df_saman = load_data(saman_file)
+
+    # Add Header with Refresh and Last Updated Info
+    col_s_text, col_s_btn = st.columns([3, 1])
+    with col_s_text:
+        # Fetch the time info specifically for the Samanupatik CSV
+        update_time, time_ago = get_time_info(saman_file)
+        st.caption(f"Last updated: **{update_time}** ({time_ago})")
+
+    with col_s_btn:
+        if st.button("🔄 Refresh Samanupatik Data"):
+            with st.spinner("Scraping Proportional Votes..."):
+                if get_samanupatik_results():
+                    st.success("Samanupatik Data Updated!")
+                    time.sleep(1)
+                    st.rerun()
+
+    st.divider()
+    
+    if df_saman is not None and not df_saman.empty:
+        # 3. National Summary Metric
+        total_pr_votes = df_saman['Samanupatik Votes'].sum()
+        st.metric("Total Proportional Votes Counted", f"{total_pr_votes:,}")
+
+        # 4. Pie Chart: National Vote Share
+        st.write("### 📊 Proportional Vote Share")
+        # We take top 10 parties and group the rest as "Others" for a cleaner pie
+        df_pie = df_saman.copy()
+        if len(df_pie) > 10:
+            top_10 = df_pie.head(10)
+            others_val = df_pie.iloc[10:]['Samanupatik Votes'].sum()
+            others_row = pd.DataFrame([{"Party Name": "Others", "Samanupatik Votes": others_val}])
+            df_pie = pd.concat([top_10, others_row], ignore_index=True)
+
+        fig_saman_pie = px.pie(
+            df_pie,
+            values='Samanupatik Votes',
+            names='Party Name',
+            hole=0.4,
+            title="National Samanupatik Vote Distribution"
+        )
+        fig_saman_pie.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_saman_pie, use_container_width=True)
+
+        st.divider()
+
+        # 5. Bar Chart: Vote Count Comparison
+        st.write("### 📈 Top 20 Parties (Vote Count)")
+        df_bar = df_saman.head(20).sort_values('Samanupatik Votes', ascending=True)
+        fig_saman_bar = px.bar(
+            df_bar,
+            x='Samanupatik Votes',
+            y='Party Name',
+            orientation='h',
+            color='Samanupatik Votes',
+            color_continuous_scale='Blues',
+            text_auto='.2s'
+        )
+        st.plotly_chart(fig_saman_bar, use_container_width=True)
+
+        # 6. Data Table
+        with st.expander("📄 View Full Samanupatik Table"):
+            st.dataframe(df_saman, use_container_width=True, hide_index=True)
+    else:
+        st.info("No Samanupatik data available. Click refresh to begin.")
+
+# --- Tab 3: Voter Statistics ---
+with tab3:
     if df_voters is not None:
         st.header("Voter Turnout & Statistics")
 
@@ -504,8 +578,8 @@ with tab2:
         else:
             st.dataframe(df_voters, use_container_width=True)
 
-# --- Tab 3: Party List ---
-with tab3:
+# --- Tab 4: Party List ---
+with tab4:
     if df_parties is not None:
         st.header("🚩 Participating Political Parties")
 

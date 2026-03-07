@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 import os
+import re
 
 import concurrent.futures
 
@@ -46,50 +47,82 @@ def to_nepali(number):
     return str(number).translate(NEPALI_TABLE)
 
 ## Voter data
-def election_2082_get_voter_data(constituency):
-    url = f"https://election.onlinekhabar.com/central-chetra/{constituency}"
-    headers = {'User-Agent': 'Mozilla/5.0'}
 
+def get_samanupatik_results():
+    """
+    Scrapes Samanupatik (Proportional) results from the /parties page.
+    Matches the specific candidate-card-square and vote count div classes.
+    """
+    url = "https://election.onlinekhabar.com/parties"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+    }
+    filename = "election_2082_samanupatik_results.csv"
+
+    print("📡 Fetching national Samanupatik data from /parties page...")
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=20)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 1. Total Votes
-        total_votes_tag = soup.find('p', class_='text-[1.5rem]')
-        if total_votes_tag:
-            raw_val = total_votes_tag.get_text(strip=True).replace(',', '')
-            # Python int() handles Nepali digits automatically once commas are gone
-            clean_total_votes = int(raw_val)
+        samanupatik_data = []
+
+        # 1. Find all party cards
+        cards = soup.find_all('div', class_='okel-candidate-card')
+
+        for card in cards:
+            # 2. Extract Party Name
+            # Specifically targeting the <a> tag with class 'line-clamp-1'
+            name_tag = card.find('a', class_='line-clamp-1')
+            party_name = name_tag.get_text(strip=True) if name_tag else None
+
+            # 3. Find Samanupatik Votes
+            # Targeting the specific div that contains the "समानुपातिक मत" label
+            vote_val = 0
+            # Look for the specific background and hidden class used for the vote box
+            vote_box = card.find('div', class_='bg-[#F1F1F4]', string=lambda t: t and "समानुपातिक मत" in t)
+
+            # If the direct string match fails, search through info boxes
+            if not vote_box:
+                info_sections = card.find_all('div', class_='bg-[#F1F1F4]')
+                for section in info_sections:
+                    if "समानुपातिक मत" in section.get_text():
+                        vote_box = section
+                        break
+
+            if vote_box:
+                vote_tag = vote_box.find('h5')
+                if vote_tag:
+                    raw_vote = vote_tag.get_text(strip=True).replace(',', '')
+                    # Extract digits only (handles Nepali digits like २२,४४२)
+                    vote_digits = re.sub(r'\D', '', raw_vote)
+                    vote_val = int(vote_digits) if vote_digits else 0
+
+            if party_name:
+                samanupatik_data.append({
+                    "Party Name": party_name,
+                    "Samanupatik Votes": vote_val
+                })
+                # Print each party as it's found for debugging
+                print(f"Scraped: {party_name} -> {vote_val}")
+
+        # 4. Save and Return
+        if samanupatik_data:
+            df = pd.DataFrame(samanupatik_data)
+            # Remove rows with 0 votes and sort
+            df = df[df['Samanupatik Votes'] > 0]
+            df = df.sort_values(by="Samanupatik Votes", ascending=False)
+
+            df.to_csv(filename, index=False, encoding='utf-8-sig')
+            print(f"\n✅ Success! Saved {len(df)} party results to {filename}")
+            return True
         else:
-            clean_total_votes = 0
-
-        # 2. Vote Percentage
-        voted_tag = soup.find('span', string=lambda t: t and "Percent Voted" in t)
-        if voted_tag:
-            percent_text = voted_tag.find_next_sibling('span').get_text(strip=True)
-            clean_percent = float(percent_text.replace('%', ''))
-        else:
-            clean_percent = 0.0
-
-        # 3. Calculate Total Casted Votes
-        total_casted_votes = int(clean_total_votes * (clean_percent / 100))
-
-        return {
-            "Constituency": constituency,
-            "Total Votes": clean_total_votes,
-            "Vote %": clean_percent,
-            "Total Casted Votes": total_casted_votes
-        }
+            print("⚠️ No Samanupatik data found. Check if page structure changed.")
+            return False
 
     except Exception as e:
-        print(f"Error scraping {constituency}: {e}")
-        return {
-            "Constituency": constituency,
-            "Total Votes": 0,
-            "Vote %": 0.0,
-            "Total Casted Votes": 0
-        }
+        print(f"❌ Error scraping /parties: {e}")
+        return False
 
 def get_all_voter_data():
     """
@@ -264,6 +297,7 @@ def update_election_count(constituency):
 
 def get_all_live_results(st_progress=None, st_status=None):
     """
+    This gets result for direct elected winner
     Scrapes all constituencies using 5 parallel threads and saves
     the final result in a single batch for maximum performance.
     """
@@ -328,10 +362,80 @@ def get_all_live_results(st_progress=None, st_status=None):
     return False
 
 
+def get_samanupatik_results():
+    """
+    Scrapes Samanupatik (Proportional) results from the /parties page.
+    This page uses a card-based layout which is highly reliable for scraping.
+    """
+    url = "https://election.onlinekhabar.com/parties"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+    }
+    filename = "election_2082_samanupatik_results.csv"
+
+    print("📡 Fetching Samanupatik data from /parties page...")
+    try:
+        response = requests.get(url, headers=headers, timeout=20)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        samanupatik_data = []
+
+        # 1. Find all party cards
+        cards = soup.find_all('div', class_='okel-candidate-card')
+
+        for card in cards:
+            # 2. Extract Party Name
+            # Found in the second <a> tag inside candidate-card-square
+            name_tag = card.find('div', class_='candidate-card-square').find('a', class_='line-clamp-1')
+            party_name = name_tag.get_text(strip=True) if name_tag else None
+
+            # 3. Find Samanupatik Votes
+            # We look for the span containing "समानुपातिक मत" then find the <h5> in the same container
+            vote_val = 0
+            info_sections = card.find_all('div', class_='bg-[#F1F1F4]')
+            for section in info_sections:
+                if "समानुपातिक मत" in section.get_text():
+                    vote_tag = section.find('h5')
+                    if vote_tag:
+                        # Clean Nepali commas and convert to integer
+                        raw_vote = vote_tag.get_text(strip=True).replace(',', '')
+                        # Regex to extract only digits (handles Nepali/English digits)
+                        vote_digits = re.sub(r'\D', '', raw_vote)
+                        vote_val = int(vote_digits) if vote_digits else 0
+                    break
+
+            if party_name:
+                samanupatik_data.append({
+                    "Party Name": party_name,
+                    "Samanupatik Votes": vote_val
+                })
+
+        # 4. Save and Return
+        if samanupatik_data:
+            df = pd.DataFrame(samanupatik_data)
+            # Filter out entries with 0 votes and sort
+            df = df[df['Samanupatik Votes'] > 0]
+            df = df.sort_values(by="Samanupatik Votes", ascending=False)
+
+            df.to_csv(filename, index=False, encoding='utf-8-sig')
+            print(f"✅ Success! Saved {len(df)} parties from the cards page.")
+            print(df.head())
+            return True
+        else:
+            print("⚠️ No party data found on the /parties page.")
+            return False
+
+    except Exception as e:
+        print(f"❌ Error scraping /parties: {e}")
+        return False
+
+
 if __name__ == "__main__":
     # get_all_voter_data()
     # get_party_list()
-    update_election_count('kapilbstu3')
+    # update_election_count('kapilbstu3')
     # get_all_live_results()
+    get_samanupatik_results()
 
 
