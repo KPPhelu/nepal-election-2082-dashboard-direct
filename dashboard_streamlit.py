@@ -124,12 +124,75 @@ def calculate_vote_share(df_live, df_voters):
     df_live['Vote % Share'] = df_live.apply(get_share, axis=1)
     return df_live
 
+import numpy as np
+
+def calculate_samanupatik_seats(df_saman):
+    """
+    Calculate PR (samanupatik) seats only for parties whose votes exceed
+    the quota. Total valid votes = sum of these parties' votes.
+    """
+    TOTAL_SEATS = 110
+
+    df = df_saman.copy()
+    total_votes = df["Samanupatik Votes"].sum()
+
+    # Initial quota based on total votes
+    initial_quota = total_votes / TOTAL_SEATS
+
+    # Only parties above quota qualify
+    qualified = df[df["Samanupatik Votes"] >= initial_quota].copy()
+
+    if qualified.empty:
+        return None
+
+    # Total valid votes for allocation
+    valid_votes = qualified["Samanupatik Votes"].sum()
+
+    # Effective quota
+    quota = valid_votes / TOTAL_SEATS
+
+    # Exact seats
+    exact_seats = qualified["Samanupatik Votes"] / quota
+
+    # Floor seats
+    qualified["Seats"] = np.floor(exact_seats).astype(int)
+
+    # Remainder for leftover seat distribution
+    qualified["Remainder"] = exact_seats - qualified["Seats"]
+
+    seats_used = qualified["Seats"].sum()
+    remaining = TOTAL_SEATS - seats_used
+
+    # Distribute remaining seats based on largest remainder
+    qualified = qualified.sort_values("Remainder", ascending=False)
+    qualified.iloc[:remaining, qualified.columns.get_loc("Seats")] += 1
+
+    # Sort final result
+    qualified = qualified.sort_values("Seats", ascending=False)
+
+    # Add effective vote % for clarity
+    qualified["Vote % (Effective)"] = qualified["Samanupatik Votes"] / valid_votes
+
+    return qualified[
+        ["Party Name", "Samanupatik Votes", "Vote % (Effective)", "Seats"]
+    ]
+
 # Load your scraped data
 df_voters = load_data("election_2082_voter_stats.csv")
 df_parties = load_data("election_2082_party_list.csv")
 # df_live = load_data("live_election_results_2082.csv")
 df_live = load_data_with_fallback("live_election_results_2082.csv", "live_election_results_2082_backup.csv")
 df_translate = load_data("translation_name_map.csv")
+
+# ---------------------------------------------------
+# Load Samanupatik data globally (needed by dashboards)
+# ---------------------------------------------------
+saman_file = "election_2082_samanupatik_results.csv"
+df_saman = load_data(saman_file)
+
+df_pr_seats = None
+if df_saman is not None and not df_saman.empty:
+    df_pr_seats = calculate_samanupatik_seats(df_saman)
 
 # Apply the fix
 if df_live is not None:
@@ -138,10 +201,297 @@ if df_live is not None:
 
 # Create Tabs for different views
 # tab1, tab2, tab3 = st.tabs(["📡 Live Count", "📊 Voter Stats", "🚩 Party List"])
-tab1, tab2, tab3, tab4 = st.tabs(["📡 प्रत्यक्ष", "🗳️ समानुपातिक", "📊 Voter Stats", "🚩 Party List"])
+# tab1, tab2, tab3, tab4 = st.tabs(["📡 प्रत्यक्ष", "🗳️ समानुपातिक", "📊 Voter Stats", "🚩 Party List"])
+# tab1, tab2, tab3, tab4, tab5 = st.tabs(
+#     ["🏆 Result Summary", "📡 प्रत्यक्ष", "🗳️ समानुपातिक", "📊 Voter Stats", "🚩 Party List"]
+# )
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    [
+"🏛️ जम्मा सिट",
+"🏆 प्रत्यक्ष  सिट",
+        "📡 प्रत्यक्ष भोट गणना",
+        "🗳️ समानुपातिक भोट गणना र सिट",
+        "📊 Voter Stats",
+        "🚩 Party List",
 
-# --- Tab 1: Direct elected  ---
+    ]
+)
+
+# --- Tab 1: Total Parliament Result ---
 with tab1:
+
+    st.header("🏛️ Total Parliament Composition")
+
+    if df_live is None or df_pr_seats is None:
+        st.warning("Waiting for both Direct and PR results.")
+    else:
+
+        # --------------------------------
+        # Direct Seats
+        # --------------------------------
+        direct_seats = (
+            df_live[df_live["Status"] == "Winner"]
+            ["party"]
+            .value_counts()
+            .reset_index()
+        )
+        direct_seats.columns = ["Party", "Direct Seats"]
+
+        # --------------------------------
+        # PR Seats
+        # --------------------------------
+        pr_seats = df_pr_seats.rename(
+            columns={
+                "Party Name": "Party",
+                "Seats": "PR Seats"
+            }
+        )[["Party", "PR Seats"]]
+
+        # --------------------------------
+        # Merge totals
+        # --------------------------------
+        total_df = pd.merge(
+            direct_seats,
+            pr_seats,
+            on="Party",
+            how="outer"
+        ).fillna(0)
+
+        total_df["Direct Seats"] = total_df["Direct Seats"].astype(int)
+        total_df["PR Seats"] = total_df["PR Seats"].astype(int)
+
+        total_df["Total Seats"] = (
+            total_df["Direct Seats"] +
+            total_df["PR Seats"]
+        )
+
+        total_df = total_df.sort_values("Total Seats", ascending=False)
+
+        # --------------------------------
+        # Parliament Pie
+        # --------------------------------
+        fig_total = px.pie(
+            total_df,
+            values="Total Seats",
+            names="Party",
+            hole=0.45,
+            title="Total Parliament Seat Share"
+        )
+
+        st.plotly_chart(fig_total, use_container_width=True)
+
+        st.divider()
+
+        # --------------------------------
+        # Majority Tracker
+        # --------------------------------
+        TOTAL_PARLIAMENT = total_df["Total Seats"].sum()
+        MAJORITY = TOTAL_PARLIAMENT // 2 + 1
+
+        st.subheader(f"Majority Mark: {MAJORITY} Seats")
+
+        fig_bar = px.bar(
+            total_df,
+            x="Party",
+            y="Total Seats",
+            text="Total Seats",
+            color="Party"
+        )
+
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+        st.divider()
+
+        st.dataframe(total_df, use_container_width=True, hide_index=True)
+
+# --- Tab 2: Direct Election Result Summary ---
+with tab2:
+    # st.header("🏆 Direct Election Result Summary (Confirmed Winners)")
+
+    if df_live is None:
+        st.warning("Live result data not available.")
+    else:
+        # ---------------------------------------------------
+        # 1. Filter Confirmed Winners
+        # ---------------------------------------------------
+        winners = df_live[df_live["Status"] == "Winner"].copy()
+
+        if winners.empty:
+            st.info("No confirmed winners yet.")
+        else:
+
+            # --------------------------------------------
+            # Clean Age Column (extract numeric age)
+            # --------------------------------------------
+            winners["age_num"] = (
+                winners["age"]
+                .astype(str)
+                .str.extract(r"(\d+)")
+                .astype(float)
+            )
+
+            st.header(
+                f"🏆 Direct Election Result Summary (Confirmed Winners: {winners['ID'].nunique()})"
+            )
+
+            # ==================================================
+            # PARTY SEAT PROPORTION
+            # ==================================================
+            st.subheader("🎯 Party Win Proportion")
+
+            party_counts = winners["party"].value_counts().reset_index()
+            party_counts.columns = ["Party", "Seats"]
+
+            fig_party_pie = px.pie(
+                party_counts,
+                values="Seats",
+                names="Party",
+                hole=0.45,
+                title="Seat Share Among Confirmed Winners"
+            )
+
+            fig_party_pie.update_traces(textinfo="percent+label")
+            st.plotly_chart(fig_party_pie, use_container_width=True)
+
+            st.divider()
+
+            # ==================================================
+            # AGE DISTRIBUTION (TOTAL)
+            # ==================================================
+            st.subheader("👥 Age Distribution of Elected Candidates")
+
+            fig_age_hist = px.histogram(
+                winners,
+                x="age_num",
+                nbins=15,
+                title="Overall Age Distribution",
+                labels={"age_num": "Age"}
+            )
+
+            # Add spacing between bars
+            fig_age_hist.update_layout(
+                bargap=0.15  # increase for more gap (0–1)
+            )
+
+            st.plotly_chart(fig_age_hist, use_container_width=True)
+
+            st.divider()
+
+            # ==================================================
+            # AGE DISTRIBUTION PARTY-WISE
+            # ==================================================
+            st.subheader("🏛️ Party-wise Age Distribution")
+
+            fig_party_age = px.box(
+                winners,
+                x="party",
+                y="age_num",
+                color="party",
+                title="Age Spread by Party",
+                labels={"age_num": "Age", "party": "Party"}
+            )
+
+            fig_party_age.update_layout(showlegend=False)
+            st.plotly_chart(fig_party_age, use_container_width=True)
+
+            st.divider()
+
+            # ==================================================
+            # SUMMARY METRICS
+            # ==================================================
+            st.subheader("📊 Summary Statistics")
+
+            col1, col2, col3 = st.columns(3)
+
+            col1.metric("Total Winners", winners["ID"].nunique())
+            col2.metric("Average Age", f"{winners['age_num'].mean():.1f} yrs")
+            col3.metric("Youngest / Oldest",
+                        f"{int(winners['age_num'].min())} / {int(winners['age_num'].max())}")
+
+            st.divider()
+
+            # ==================================================
+            # WINNERS TABLE
+            # ==================================================
+
+            df_live["votes_int"] = df_live["votes"].apply(
+                lambda x: int(str(x).replace(",", "")) if pd.notnull(x) else 0
+            )
+
+
+            def calculate_margin(group):
+                group = group.sort_values("votes_int", ascending=False)
+
+                if len(group) < 2:
+                    margin = group.iloc[0]["votes_int"]
+                else:
+                    margin = group.iloc[0]["votes_int"] - group.iloc[1]["votes_int"]
+
+                group.loc[group.index[0], "Winning Margin"] = margin
+                return group
+
+
+            df_margin = df_live.groupby("ID", group_keys=False).apply(calculate_margin)
+
+            # Merge margin back into winners
+            winners = winners.merge(
+                df_margin[["ID", "name", "Winning Margin"]],
+                on=["ID", "name"],
+                how="left"
+            )
+
+            st.subheader("📋 Confirmed Winners List")
+            display_df = winners[
+                [
+                    "Constituency",
+                    "name",
+                    "party",
+                    "age",
+                    "votes",
+                    "Vote % Share",
+                    "Winning Margin"
+                ]
+            ].sort_values("Constituency")
+
+            st.caption("🔎 Filter results")
+
+            c1, c2, c3 = st.columns(3)
+
+            with c1:
+                search_const = st.text_input("Search Constituency")
+
+            with c2:
+                search_name = st.text_input("Search Candidate")
+
+            with c3:
+                search_party = st.text_input("Search Party")
+
+            filtered_df = display_df.copy()
+
+            if search_const:
+                filtered_df = filtered_df[
+                    filtered_df["Constituency"].str.contains(search_const, case=False, na=False)
+                ]
+
+            if search_name:
+                filtered_df = filtered_df[
+                    filtered_df["name"].str.contains(search_name, case=False, na=False)
+                ]
+
+            if search_party:
+                filtered_df = filtered_df[
+                    filtered_df["party"].str.contains(search_party, case=False, na=False)
+                ]
+
+            # Display filtered table
+            st.dataframe(
+                filtered_df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+# --- Tab 3: Direct elected  ---
+with tab3:
     if df_live is not None:
         # --- DEFINE GLOBAL COLOR MAP FIRST ---
         # Get all unique parties from the live data
@@ -465,13 +815,17 @@ with tab1:
             else:
                 st.success("All constituencies have started reporting votes!")
 
-# --- Tab 2: Samanupatik (Proportional) ---
-with tab2:
+# --- Tab 4: Samanupatik (Proportional) ---
+with tab4:
     st.subheader("🗳️ National Samanupatik (Proportional) Tally")
 
     # 1. Load Samanupatik Data
     saman_file = "election_2082_samanupatik_results.csv"
     df_saman = load_data(saman_file)
+
+    df_pr_seats = None
+    if df_saman is not None and not df_saman.empty:
+        df_pr_seats = calculate_samanupatik_seats(df_saman)
 
     # Add Header with Refresh and Last Updated Info
     col_s_text, col_s_btn = st.columns([3, 1])
@@ -538,8 +892,43 @@ with tab2:
     else:
         st.info("No Samanupatik data available. Click refresh to begin.")
 
-# --- Tab 3: Voter Statistics ---
-with tab3:
+    st.divider()
+    st.subheader("🏛️ Projected PR Seat Allocation (110 Seats)")
+
+    if df_pr_seats is not None:
+        # --- Compute total valid votes and quota ---
+        total_valid_votes = df_pr_seats["Samanupatik Votes"].sum()
+        total_seats = 110
+        quota_vote = total_valid_votes / total_seats
+
+        # Threshold in percentage
+        THRESHOLD = 0.03  # 3%
+        threshold_votes = total_valid_votes * THRESHOLD
+
+        # Display metrics side by side
+        c1, c2 = st.columns(2)
+        c1.metric("Effective Quota per Seat", f"{int(quota_vote):,} votes")
+        c2.metric(f"Threshold ({int(THRESHOLD * 100)}%)", f"{int(threshold_votes):,} votes")
+
+        fig_pr_seats = px.pie(
+            df_pr_seats,
+            values="Seats",
+            names="Party Name",
+            hole=0.45,
+            title="Samanupatik Seat Distribution"
+        )
+
+        fig_pr_seats.update_traces(textinfo="percent+label")
+        st.plotly_chart(fig_pr_seats, use_container_width=True)
+
+        with st.expander("📋 PR Seat Table"):
+            st.dataframe(df_pr_seats, use_container_width=True, hide_index=True)
+
+    else:
+        st.info("Not enough data to calculate PR seats.")
+
+# --- Tab 5: Voter Statistics ---
+with tab5:
     if df_voters is not None:
         st.header("Voter Turnout & Statistics")
 
@@ -579,8 +968,8 @@ with tab3:
         else:
             st.dataframe(df_voters, use_container_width=True)
 
-# --- Tab 4: Party List ---
-with tab4:
+# --- Tab 6: Party List ---
+with tab6:
     if df_parties is not None:
         st.header("🚩 Participating Political Parties")
 
