@@ -306,7 +306,6 @@ with tab1:
 
 # --- Tab 2: Direct Election Result Summary ---
 with tab2:
-    # st.header("🏆 Direct Election Result Summary (Confirmed Winners)")
 
     if df_live is None:
         st.warning("Live result data not available.")
@@ -319,7 +318,6 @@ with tab2:
         if winners.empty:
             st.info("No confirmed winners yet.")
         else:
-
             # --------------------------------------------
             # Clean Age Column (extract numeric age)
             # --------------------------------------------
@@ -367,12 +365,7 @@ with tab2:
                 title="Overall Age Distribution",
                 labels={"age_num": "Age"}
             )
-
-            # Add spacing between bars
-            fig_age_hist.update_layout(
-                bargap=0.15  # increase for more gap (0–1)
-            )
-
+            fig_age_hist.update_layout(bargap=0.15)
             st.plotly_chart(fig_age_hist, use_container_width=True)
 
             st.divider()
@@ -390,7 +383,6 @@ with tab2:
                 title="Age Spread by Party",
                 labels={"age_num": "Age", "party": "Party"}
             )
-
             fig_party_age.update_layout(showlegend=False)
             st.plotly_chart(fig_party_age, use_container_width=True)
 
@@ -400,47 +392,37 @@ with tab2:
             # SUMMARY METRICS
             # ==================================================
             st.subheader("📊 Summary Statistics")
-
             col1, col2, col3 = st.columns(3)
-
             col1.metric("Total Winners", winners["ID"].nunique())
             col2.metric("Average Age", f"{winners['age_num'].mean():.1f} yrs")
-            col3.metric("Youngest / Oldest",
-                        f"{int(winners['age_num'].min())} / {int(winners['age_num'].max())}")
+            col3.metric(
+                "Youngest / Oldest",
+                f"{int(winners['age_num'].min())} / {int(winners['age_num'].max())}"
+            )
 
             st.divider()
 
             # ==================================================
             # WINNERS TABLE
             # ==================================================
-
             df_live["votes_int"] = df_live["votes"].apply(
                 lambda x: int(str(x).replace(",", "")) if pd.notnull(x) else 0
             )
 
-
             def calculate_margin(group):
                 group = group.sort_values("votes_int", ascending=False)
-
-                if len(group) < 2:
-                    margin = group.iloc[0]["votes_int"]
-                else:
-                    margin = group.iloc[0]["votes_int"] - group.iloc[1]["votes_int"]
-
+                margin = group.iloc[0]["votes_int"] if len(group) < 2 else group.iloc[0]["votes_int"] - group.iloc[1]["votes_int"]
                 group.loc[group.index[0], "Winning Margin"] = margin
                 return group
 
-
             df_margin = df_live.groupby("ID", group_keys=False).apply(calculate_margin)
 
-            # Merge margin back into winners
             winners = winners.merge(
                 df_margin[["ID", "name", "Winning Margin"]],
                 on=["ID", "name"],
                 how="left"
             )
 
-            st.subheader("📋 Confirmed Winners List")
             display_df = winners[
                 [
                     "Constituency",
@@ -449,43 +431,68 @@ with tab2:
                     "age",
                     "votes",
                     "Vote % Share",
-                    "Winning Margin"
+                    "Winning Margin",
+                    "ID"
                 ]
             ].sort_values("Constituency")
 
-            st.caption("🔎 Filter results")
+            # --- Nepali + English Combo Search ---
+            if df_translate is not None:
+                search_master = pd.merge(
+                    display_df,
+                    df_translate[['ID', 'name', 'name_english']],
+                    on=['ID', 'name'],
+                    how='left'
+                )
+                search_master['name_english'] = search_master['name_english'].fillna(search_master['name'])
+                search_master['search_label'] = (
+                    search_master['name_english'] + " | " +
+                    search_master['name'] + " (" +
+                    search_master['ID'] + ")"
+                )
 
-            c1, c2, c3 = st.columns(3)
+                selected_option = st.selectbox(
+                    "Search Candidate / Constituency (Nepali or English):",
+                    options=[""] + sorted(search_master['search_label'].unique().tolist()),
+                    index=0,
+                    placeholder="Type to search...",
+                    key="tab2_search_selectbox"
+                )
 
-            with c1:
-                search_const = st.text_input("Search Constituency")
+                # Determine filtered IDs
+                filtered_ids = []
+                if selected_option:
+                    selected_row = search_master[search_master['search_label'] == selected_option].iloc[0]
+                    filtered_ids = [selected_row['ID']]
 
-            with c2:
-                search_name = st.text_input("Search Candidate")
+            else:
+                st.warning("Search unavailable: Ensure translation data is loaded.")
+                filtered_ids = []
 
-            with c3:
-                search_party = st.text_input("Search Party")
+            # --- Display Table with Highlighted Filtered Rows ---
+            # Copy display_df without ID for showing
+            display_for_st = display_df.drop(columns=['ID'])
 
-            filtered_df = display_df.copy()
+            # Initially, nothing is filtered
+            filtered_ids = set()
 
-            if search_const:
-                filtered_df = filtered_df[
-                    filtered_df["Constituency"].str.contains(search_const, case=False, na=False)
-                ]
+            if selected_option:
+                # Get the selected constituency ID
+                selected_row = search_master[search_master['search_label'] == selected_option].iloc[0]
+                selected_id = selected_row['ID']
+                filtered_ids = {selected_id}
 
-            if search_name:
-                filtered_df = filtered_df[
-                    filtered_df["name"].str.contains(search_name, case=False, na=False)
-                ]
+            # Apply styling
+            def highlight_filtered(row):
+                # row.name gives the index in display_for_st, get ID from original display_df
+                original_id = display_df.iloc[row.name]['ID']
+                if original_id in filtered_ids:
+                    return ["background-color: #ffff99"] * len(row)
+                return [""] * len(row)
 
-            if search_party:
-                filtered_df = filtered_df[
-                    filtered_df["party"].str.contains(search_party, case=False, na=False)
-                ]
-
-            # Display filtered table
+            st.subheader("📋 Confirmed Winners List")
             st.dataframe(
-                filtered_df,
+                display_for_st.style.apply(highlight_filtered, axis=1),
                 use_container_width=True,
                 hide_index=True
             )
